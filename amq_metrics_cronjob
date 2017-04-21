@@ -1,0 +1,5 @@
+MAILTO=""
+
+#AMQ Logging to Graphite
+
+* * * * * a-mq-user timeout 59 /path/to/amq_metrics_v097.py -m metric.prefix -mem metric.prefix.HeapMemoryUsage -stat metric.prefix.statistics -os metric.prefix.osMetrics -u url.to.graphite -e /path/to/folder/containing/amq_metrics_v097.py/cronlogs/graphite_out.err > /path/to/folder/containing/amq_metrics_v097.py/cronlogs/graphite_out.log
