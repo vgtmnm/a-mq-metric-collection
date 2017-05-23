@@ -12,6 +12,7 @@ import socket
 import os
 import logging
 import time
+import subprocess
 from sys import argv
 from requests.auth import HTTPBasicAuth
 
@@ -169,10 +170,10 @@ def im_on_aws():
 def gather_connection_metrics():
     on_aws = im_on_aws()
     if on_aws:
-        connections = commands.getoutput("""/usr/sbin/lsof -p $(pgrep -f [k]araf-jmx-boot) -i | grep 61616 | grep -v LISTEN | awk '{print $9}' | sort | cut -d '>' -f2 | cut -d ':' -f1 | sort | uniq -c |  sed s/-/./g | sort | uniq -c | awk '{print $3 " " $2}' | sed 's/\./_/g' | sed 's/_eu_west_1_compute_internal//g' | sed 's/ip_//'""").split("\n")
+        connections = commands.getoutput("""/usr/sbin/lsof -np $(pgrep -f [k]araf-jmx-boot) -i | grep 61616 | grep -v LISTEN | awk '{print $9}' | sort | cut -d '>' -f2 | cut -d ':' -f1 | sort | uniq -c |  sed s/-/./g | sort | uniq -c | awk '{print $3 " " $2}' | sed 's/\./_/g' | sed 's/_eu_west_1_compute_internal//g' | sed 's/ip_//'""").split("\n")
 
     else:
-        connections = commands.getoutput("""/usr/sbin/lsof -p $(pgrep -f [k]araf-jmx-boot) -i | grep 61616 | grep -v LISTEN | awk '{print $9}' | sort | cut -d '>' -f2 | cut -d ':' -f1 | sort | uniq -c | awk '{print $2 " " $1}' | sed 's/\./_/g'""").split("\n")
+        connections = commands.getoutput("""/usr/sbin/lsof -np $(pgrep -f [k]araf-jmx-boot) -i | grep 61616 | grep -v LISTEN | awk '{print $9}' | sort | cut -d '>' -f2 | cut -d ':' -f1 | sort | uniq -c | awk '{print $2 " " $1}' | sed 's/\./_/g'""").split("\n")
 
     metrics = {}
     for line in connections:
@@ -198,6 +199,7 @@ def gather_disc_metrics():
         return None
 
 def gather_ram_metrics():
+    #OS related checks (free), added 2016-12-07
     getRamUsage = commands.getoutput('free | grep -v "total" | awk \'{print $2,$3,$4,$5,$6,$7}\'').split("\n")
 
     concatedRamInfo = getRamUsage[0] + " " + getRamUsage[1]
@@ -258,6 +260,21 @@ def gather_network_metrics():
 def no_advisory_filter(queue):
     return 'Advisory' not in queue["Name"]
 
+def fetch_gc_metrics(ip):
+    p1 = subprocess.Popen(['ps','-fwwC','java'], stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(['grep','UseConcMarkSweepGC'], stdin=p1.stdout, stdout=subprocess.PIPE)
+    p2.communicate()
+
+    gc_metrics, gc_metrics_sweep = None, None
+
+    if (p2.returncode == 0):
+        gc_metrics = fetch_metric(ip, 'java.lang:type=GarbageCollector,name=ParNew/CollectionTime')
+        gc_metrics_sweep = fetch_metric(ip, 'java.lang:type=GarbageCollector,name=ConcurrentMarkSweep/CollectionTime')
+    else:
+        gc_metrics = fetch_metric(ip, 'java.lang:type=GarbageCollector,name=G1 Young Generation/CollectionTime')
+
+    return (gc_metrics, gc_metrics_sweep)
+
 if __name__ == '__main__':
 
     result = []
@@ -277,7 +294,8 @@ if __name__ == '__main__':
 
     url_part = 'org.apache.activemq:brokerName=*,destinationName=*,destinationType=*,type=Broker/'
     heap_metrics = fetch_metric(ip, 'java.lang:type=Memory/*')
-    gc_metrics = fetch_metric(ip, 'java.lang:type=GarbageCollector,name=G1 Young Generation/CollectionTime')
+    (gc_metrics, gc_metrics_sweep) = fetch_gc_metrics(ip)
+
     os_metrics = fetch_metric(ip, 'java.lang:type=OperatingSystem/' + ','.join(os_metrics))
     stats_metrics = fetch_metric(ip, 'java.lang:type=Threading/ThreadCount')
     # All does not have timestamp, just pick the one from queue_metrics and use it everywhere
@@ -337,6 +355,9 @@ if __name__ == '__main__':
 
     if gc_metrics != None:
         metrics_to_graphite.append(key_value_metric_lines(os_prefix, {"GCCollectionTime": gc_metrics['value']}, timestamp))
+
+    if gc_metrics_sweep != None:
+        metrics_to_graphite.append(key_value_metric_lines(os_prefix, {"GCSweepCollectionTime": gc_metrics_sweep['value']}, timestamp))
 
     if network_metrics != None:
         metrics_to_graphite.append(key_value_metric_lines(os_prefix, network_metrics, timestamp))
